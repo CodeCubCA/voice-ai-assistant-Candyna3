@@ -260,59 +260,123 @@ def transcribe_audio(audio_bytes, language_code="en-US"):
     except Exception as e:
         return f"Error: {str(e)}"
 
-# Function to generate TTS audio using Edge TTS (natural human-like voices)
-async def generate_tts_async(text, output_file, voice="en-US-JennyNeural"):
-    """Async function to generate TTS using Edge TTS"""
-    try:
-        communicate = edge_tts.Communicate(text, voice)
-        await communicate.save(output_file)
-    except Exception as e:
-        raise Exception(f"Edge TTS error: {str(e)}")
-
+# Function to generate TTS audio using Edge TTS with gTTS fallback
 def generate_tts_audio(text, voice="en-US-JennyNeural"):
-    """Convert text to speech using Edge TTS and return audio bytes"""
+    """Convert text to speech using Edge TTS (with gTTS fallback) and return audio bytes"""
     if not text or len(text.strip()) == 0:
         return None
 
-    # Limit text length to avoid issues (Edge TTS has limits)
+    # Limit text length to avoid issues
     max_length = 1000
     if len(text) > max_length:
         text = text[:max_length] + "..."
 
+    # Try Edge TTS first
     tmp_filename = None
     try:
         # Create a temporary file to save the audio
         with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as tmp_file:
             tmp_filename = tmp_file.name
 
-        # Run the async TTS generation with the specified voice
-        # Use a new event loop to avoid conflicts
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            loop.run_until_complete(generate_tts_async(text, tmp_filename, voice))
-        finally:
-            loop.close()
+        # Define async function to generate TTS
+        async def generate_audio():
+            communicate = edge_tts.Communicate(text, voice)
+            await communicate.save(tmp_filename)
+
+        # Run in a completely new event loop in a separate thread
+        import threading
+        import time
+
+        error_container = []
+        success = [False]
+
+        def run_async():
+            try:
+                new_loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(new_loop)
+                try:
+                    new_loop.run_until_complete(generate_audio())
+                    success[0] = True
+                finally:
+                    new_loop.close()
+            except Exception as e:
+                error_container.append(e)
+
+        thread = threading.Thread(target=run_async)
+        thread.start()
+        thread.join(timeout=15)  # 15 second timeout
+
+        if thread.is_alive():
+            raise Exception("Edge TTS timeout")
+
+        if error_container:
+            raise error_container[0]
+
+        if not success[0]:
+            raise Exception("Edge TTS failed without error")
+
+        # Small delay to ensure file is fully written
+        time.sleep(0.2)
 
         # Verify the file was created and has content
-        if not os.path.exists(tmp_filename) or os.path.getsize(tmp_filename) == 0:
-            raise Exception("No audio file was generated")
+        if not os.path.exists(tmp_filename):
+            raise Exception("Audio file was not created")
+
+        file_size = os.path.getsize(tmp_filename)
+        if file_size == 0:
+            raise Exception("Audio file is empty")
 
         # Read the audio file
         with open(tmp_filename, 'rb') as f:
             audio_data = f.read()
 
         if len(audio_data) == 0:
-            raise Exception("Audio file is empty")
+            raise Exception("No audio data read from file")
 
         return audio_data
-    except Exception as e:
-        st.warning(f"⚠️ TTS Error: {str(e)}. Audio playback unavailable for this message.")
-        return None
+
+    except Exception as edge_error:
+        # Edge TTS failed, try gTTS as fallback
+        try:
+            # Extract language code from voice (e.g., "en-US-JennyNeural" -> "en")
+            lang_code = voice.split('-')[0] if '-' in voice else 'en'
+
+            # Use gTTS as fallback
+            from gtts import gTTS
+            import time
+
+            # Add small delay to avoid rate limiting
+            time.sleep(0.5)
+
+            tts = gTTS(text=text, lang=lang_code, slow=False)
+
+            # Create new temp file for gTTS
+            if tmp_filename and os.path.exists(tmp_filename):
+                try:
+                    os.unlink(tmp_filename)
+                except:
+                    pass
+
+            with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as tmp_file:
+                tmp_filename = tmp_file.name
+
+            tts.save(tmp_filename)
+
+            # Read the audio file
+            with open(tmp_filename, 'rb') as f:
+                audio_data = f.read()
+
+            return audio_data
+
+        except Exception as gtts_error:
+            # Both TTS methods failed
+            return None
     finally:
         # Clean up temp file
         if tmp_filename and os.path.exists(tmp_filename):
             try:
+                import time
+                time.sleep(0.1)
                 os.unlink(tmp_filename)
             except:
                 pass
