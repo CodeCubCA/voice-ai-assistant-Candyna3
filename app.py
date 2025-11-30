@@ -263,30 +263,59 @@ def transcribe_audio(audio_bytes, language_code="en-US"):
 # Function to generate TTS audio using Edge TTS (natural human-like voices)
 async def generate_tts_async(text, output_file, voice="en-US-JennyNeural"):
     """Async function to generate TTS using Edge TTS"""
-    communicate = edge_tts.Communicate(text, voice)
-    await communicate.save(output_file)
+    try:
+        communicate = edge_tts.Communicate(text, voice)
+        await communicate.save(output_file)
+    except Exception as e:
+        raise Exception(f"Edge TTS error: {str(e)}")
 
 def generate_tts_audio(text, voice="en-US-JennyNeural"):
     """Convert text to speech using Edge TTS and return audio bytes"""
+    if not text or len(text.strip()) == 0:
+        return None
+
+    # Limit text length to avoid issues (Edge TTS has limits)
+    max_length = 1000
+    if len(text) > max_length:
+        text = text[:max_length] + "..."
+
+    tmp_filename = None
     try:
         # Create a temporary file to save the audio
         with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as tmp_file:
             tmp_filename = tmp_file.name
 
         # Run the async TTS generation with the specified voice
-        asyncio.run(generate_tts_async(text, tmp_filename, voice))
+        # Use a new event loop to avoid conflicts
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(generate_tts_async(text, tmp_filename, voice))
+        finally:
+            loop.close()
+
+        # Verify the file was created and has content
+        if not os.path.exists(tmp_filename) or os.path.getsize(tmp_filename) == 0:
+            raise Exception("No audio file was generated")
 
         # Read the audio file
         with open(tmp_filename, 'rb') as f:
             audio_data = f.read()
 
-        # Clean up temp file
-        os.unlink(tmp_filename)
+        if len(audio_data) == 0:
+            raise Exception("Audio file is empty")
 
         return audio_data
     except Exception as e:
-        st.error(f"TTS Error: {str(e)}")
+        st.warning(f"⚠️ TTS Error: {str(e)}. Audio playback unavailable for this message.")
         return None
+    finally:
+        # Clean up temp file
+        if tmp_filename and os.path.exists(tmp_filename):
+            try:
+                os.unlink(tmp_filename)
+            except:
+                pass
 
 # Sidebar
 with st.sidebar:

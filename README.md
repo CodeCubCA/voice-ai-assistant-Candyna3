@@ -4,6 +4,11 @@
 
 An intelligent AI chatbot with voice input and output capabilities, powered by Google Gemini. This application provides a seamless conversational experience with support for multiple languages and AI personalities.
 
+## 🚀 Live Deployments
+
+Try the live application on:
+- **Hugging Face Spaces**: https://huggingface.co/spaces/Candyna/Voice-ai-assistant
+
 ## Features
 
 - **Voice Input** - Record your voice using the built-in microphone recorder with Web Speech API integration
